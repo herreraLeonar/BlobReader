@@ -3,34 +3,35 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <fstream>
+// Fix for E1696: cannot open source file "openssl/rand.h"
+// Ensure you have installed OpenSSL via vcpkg: vcpkg install openssl
+// Then, add the include directories to your project settings:
+// 1. Right-click your project > Properties > C/C++ > General > Additional Include Directories
+//    Add: $(VCPKG_ROOT)\installed\<triplet>\include
+// 2. Also, add the library directories under Linker > General > Additional Library Directories:
+//    Add: $(VCPKG_ROOT)\installed\<triplet>\lib
+// 3. Link against the OpenSSL libraries under Linker > Input > Additional Dependencies:
+//    Add: libssl.lib; libcrypto.lib;
+
+// If you installed via vcpkg and opened your project from the vcpkg-integrated environment, 
+// Visual Studio should automatically resolve the include path. 
+// If not, manually add the include path as above.
+
+// No code changes needed in PIH_DPAPI_BlobGenerator.cpp, just project configuration.
 #include <iostream>
 #include <string>
 #include <vector>
 #include <cstring>
 
-static const std::vector<uint8_t> PASS_OBF = {
-    0xFA, 0xE3, 0xE2, 0x87, 0xF9, 0xFE, 0xEB, 0xFE, 0xE3, 0xE9, 0x87,0xEF,
-    0xE4, 0xFE, 0xF8, 0xE5, 0xFA, 0xF3, 0x87, 0x98, 0x9A, 0x98, 0x9C
-};
-static const uint8_t PASS_KEY = 0xAA;
 static const int PBKDF2_ITERATIONS = 200000; // Ajusta según políticas
 static const size_t SALT_LEN = 16;
 static const size_t NONCE_LEN = 12;
 static const size_t TAG_LEN = 16;
 static const size_t KEY_LEN = 32; // AES-256
 
-char* xorDecode(const std::vector<uint8_t>& data, uint8_t key)
-{
-    char* out = new char[data.size() + 1];
-    for (size_t i = 0; i < data.size(); i++)
-        out[i] = static_cast<char>(data[i] ^ key);
-    out[data.size()] = '\0';
-    return out;
-}
-
 int main()
 {
-    // 1) Credenciales a empaquetar (igual que tu flujo actual)
+    // 1) Credenciales a empaquetar 
     const char* user = "StringTestAdmin";
     const char* pass = "StringTestPassword";
 
@@ -39,10 +40,9 @@ int main()
     combined += pass;
     combined.push_back('\0');
 
-    // 2) Passphrase ofuscada (tu ENTROPY equivalente, pero usada para derivar clave)
-    std::unique_ptr<char[]> passphrase(xorDecode(PASS_OBF, PASS_KEY));
-    const unsigned char* pwd = reinterpret_cast<const unsigned char*>(passphrase.get());
-    const int pwdLen = static_cast<int>(std::strlen(passphrase.get()));
+    // 2) pwd para el archivo
+    std::string pwd = "PIH-STATIC-ENTROPY-2026";
+    const int pwdLen = static_cast<int>(pwd.length());
 
     // 3) Genera salt y nonce aleatorios
     unsigned char salt[SALT_LEN];
@@ -54,7 +54,7 @@ int main()
 
     // 4) Deriva la clave con PBKDF2-HMAC-SHA256
     unsigned char key[KEY_LEN];
-    if (PKCS5_PBKDF2_HMAC(passphrase.get(), pwdLen, salt, (int)SALT_LEN,
+    if (PKCS5_PBKDF2_HMAC(pwd.c_str(), pwdLen, salt, (int)SALT_LEN,
         PBKDF2_ITERATIONS, EVP_sha256(), (int)KEY_LEN, key) != 1) {
         std::cerr << "[ERROR] PBKDF2 failed\n";
         return 1;
