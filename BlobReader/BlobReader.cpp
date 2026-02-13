@@ -1,25 +1,4 @@
-﻿// PIH_BlobDecrypt_EntropyPortable.cpp
-// -------------------------------------------------------------
-// Demostración: DPAPI + ENTROPY "portable" entre máquinas.
-// - La ENTROPY efectiva es "PIH-STATIC-ENTROPY-2026"
-// - Pero la reconstruimos DINÁMICAMENTE para que no quede
-//   como texto ni como bytes ASCII contiguos en el binario.
-// - Leemos un .blob (cifrado con esa entropy) y lo desciframos.
-// - Imprimimos user/pass (formato: user\0pass\0 dentro del blob).
-//
-// Uso:
-//   1) Genera el blob con BlobGen usando la MISMA entropy.
-//   2) Ejecuta pasando la ruta del blob como argv[1].
-//   3) En consola "User: ..." y "Pass: ...".
-//
-// Seguridad/Ofuscación:
-//   - La cadena "PIH-STATIC-ENTROPY-2026" NUNCA aparece en el binario.
-//   - No hay arrays estáticos con ese texto ni con sus bytes en orden.
-//   - strings.exe no debería encontrar nada útil.
-//   - La entropy se crea solo en memoria (heap/stack) y se limpia.
-//
-// -------------------------------------------------------------
-#include <openssl/evp.h>
+﻿#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <windows.h>
 #include <wincrypt.h>
@@ -30,9 +9,7 @@
 #include <algorithm>
 #include <numeric>
 
-// ------------------------------------------------------------------
-// Helpers de consola wide (evita CRT locales y facilita Windows).
-// ------------------------------------------------------------------
+// Helpers de consola
 static void PrintLine(const wchar_t* s)
 {
     DWORD written = 0;
@@ -44,15 +21,20 @@ static void PrintLine(const wchar_t* s)
     }
 }
 
-// Decodifica un buffer obfuscado por XOR y devuelve un C-string nuevo (heap).
 // - data: bytes de entrada ya barajados/obfuscados.
 // - key : clave XOR (0xAA) usada para recuperar los ASCII reales.
 // Retorna: puntero a un buffer asignado con 'new' terminado en '\0'.
 // Nota:
 //   - El llamador es responsable de liberar con 'delete[]' el puntero devuelto.
-//   - Se añade un byte extra para el terminador NUL y facilitar su uso como C-string.
-//   - No se realiza zeroization del buffer; si contiene secretos, limpialo tras usarlo.
-
+//   - Se añade un byte extra para el terminador NUL y facilitar su uso como C-string..
+// Ejemplo: dato (0x87): 1 0 0 0 0 1 1 1
+// clave(0xAA) : 1 0 1 0 1 0 1 0
+// Operación XOR :
+// 1 y 1 son iguales \rightarrow 0
+// 0 y 0 son iguales \rightarrow 0
+// 0 y 1 son distintos \rightarrow 1
+// 0 y 0 son iguales \rightarrow 0
+// Rresultado : 0 0 1 0 1 1 0 1 = 0x2D (ASCII '-')
 char* xorDecode(const std::vector<uint8_t>& data, uint8_t key)
 {
     char* out = new char[data.size() + 1];
@@ -67,18 +49,17 @@ char* xorDecode(const std::vector<uint8_t>& data, uint8_t key)
 // ------------------------------------------------------------------
 // 1) Reconstrucción DINÁMICA de la ENTROPY
 //
-// Objetivo: obtener EXACTAMENTE "PIH-STATIC-ENTROPY-2026"
+// obtener EXACTAMENTE "PIH-STATIC-ENTROPY-2026"
 // sin que esa secuencia aparezca como literal en el binario.
 // Para ello:
 //   a) Partimos de bytes NO-ASCII (ya barajados).
 //   b) Aplicamos una "unshuffling" (desbarajado) determinista.
 //   c) Aplicamos un XOR con una clave derivada en tiempo de ejecución.
-// El resultado final es la entropy real, en memoria, lista para DPAPI.
+// El resultado final es la entropy real, en memoria, lista para OpenSSL.
 // ------------------------------------------------------------------
 
 // Derivamos una clave XOR (valor final = 0xAA) sin usar el literal tal cual.
-// Si el compilador pliega constantes, no pasa nada: no es ASCII y no
-// aparece como string imprimible.
+// no es ASCII y no aparece como string imprimible.
 static inline uint8_t DeriveKey()
 {
     // Serie de operaciones sin patrón evidente para llegar a 0xAA.
@@ -145,9 +126,7 @@ char* BuildEntropy()
     return entropy;
 }
 
-// ------------------------------------------------------------------
 // 2) Descifrar el .blob con OpenSSL usando la ENTROPY reconstruida
-// ------------------------------------------------------------------
 static bool DecryptBlobWithOpenSSL(const wchar_t* blobPath,
     std::string& outUser,
     std::string& outPass)
@@ -288,10 +267,8 @@ static bool DecryptBlobWithOpenSSL(const wchar_t* blobPath,
     return true;
 }
 
-// ------------------------------------------------------------------
 // 3) main(): lee la ruta del .blob (argv[1] o ruta por defecto),
 //    descifra y muestra user/pass.
-// ------------------------------------------------------------------
 int wmain(int argc, wchar_t* argv[])
 {
     // Ruta por defecto

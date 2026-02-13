@@ -1,29 +1,12 @@
-﻿// Requiere OpenSSL 1.1+ o 3.x
-// vcpkg: vcpkg install openssl
-#include <openssl/evp.h>
+﻿#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <fstream>
-// Fix for E1696: cannot open source file "openssl/rand.h"
-// Ensure you have installed OpenSSL via vcpkg: vcpkg install openssl
-// Then, add the include directories to your project settings:
-// 1. Right-click your project > Properties > C/C++ > General > Additional Include Directories
-//    Add: $(VCPKG_ROOT)\installed\<triplet>\include
-// 2. Also, add the library directories under Linker > General > Additional Library Directories:
-//    Add: $(VCPKG_ROOT)\installed\<triplet>\lib
-// 3. Link against the OpenSSL libraries under Linker > Input > Additional Dependencies:
-//    Add: libssl.lib; libcrypto.lib;
-
-// If you installed via vcpkg and opened your project from the vcpkg-integrated environment, 
-// Visual Studio should automatically resolve the include path. 
-// If not, manually add the include path as above.
-
-// No code changes needed in PIH_DPAPI_BlobGenerator.cpp, just project configuration.
 #include <iostream>
 #include <string>
 #include <vector>
 #include <cstring>
 
-static const int PBKDF2_ITERATIONS = 200000; // Ajusta según políticas
+static const int PBKDF2_ITERATIONS = 200000; // Ajustar según políticas
 static const size_t SALT_LEN = 16;
 static const size_t NONCE_LEN = 12;
 static const size_t TAG_LEN = 16;
