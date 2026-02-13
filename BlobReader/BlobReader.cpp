@@ -114,7 +114,7 @@ char* BuildEntropy()
         3, 7, 1, 5, 0, 14, 9, 2, 12, 4, 6, 8, 10, 13, 11, 15, 16, 19, 18, 20, 17, 22, 21
     };
 
-    static const uint8_t PASS_KEY = DeriveKey();
+    static const uint8_t PASS_KEY = DeriveKey(); //0xAA
 
     // 3) Revertimos el barajado para recuperar (ascii ^ key) en orden correcto.
     std::vector<uint8_t> xored = ApplyUnshuffle(OBF, PERM);
