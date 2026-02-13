@@ -1,6 +1,8 @@
 ﻿#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <windows.h>
+#include <winuser.h>
+
 #include <wincrypt.h>
 #include <vector>
 #include <string>
@@ -8,6 +10,50 @@
 #include <fstream>
 #include <algorithm>
 #include <numeric>
+#include "resource.h"
+
+// Funciones para el llamar al blob embebido y generar el archivo de salida.
+// --- Loader del recurso embebido (RCDATA) ---
+extern "C" IMAGE_DOS_HEADER __ImageBase; // Para obtener HMODULE del módulo actual
+
+struct BlobView {
+    const unsigned char* data;
+    size_t size;
+};
+
+static BlobView GetDefaultCredsBlob()
+{
+    // HMODULE del módulo actual (EXE o DLL donde está este código)
+    HMODULE hMod = (HMODULE)&__ImageBase;
+
+    // Busca el recurso por ID y tipo RCDATA (binario crudo)
+    HRSRC hRes = FindResourceW(hMod, MAKEINTRESOURCE(IDR_DEFAULT_CREDS_BLOB), RT_RCDATA);
+
+    if (!hRes) {
+        throw std::runtime_error("FindResource(IDR_DEFAULT_CREDS_BLOB, RT_RCDATA) failed");
+    }
+
+    // Carga el recurso en memoria
+    HGLOBAL hData = LoadResource(hMod, hRes);
+    if (!hData) {
+        throw std::runtime_error("LoadResource failed");
+    }
+
+    // Tamaño del recurso
+    DWORD size = SizeofResource(hMod, hRes);
+    if (size == 0) {
+        throw std::runtime_error("SizeofResource returned 0");
+    }
+
+    // Puntero a los datos (memoria de solo lectura administrada por el sistema)
+    const void* ptr = LockResource(hData);
+    if (!ptr) {
+        throw std::runtime_error("LockResource failed");
+    }
+
+    return { static_cast<const unsigned char*>(ptr), static_cast<size_t>(size) };
+}
+// Fin blo
 
 // Helpers de consola
 static void PrintLine(const wchar_t* s)
