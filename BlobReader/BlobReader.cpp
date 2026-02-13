@@ -7,7 +7,6 @@
 #include <vector>
 #include <string>
 #include <iostream>
-#include <fstream>
 #include <algorithm>
 #include <numeric>
 #include "resource.h"
@@ -20,40 +19,6 @@ struct BlobView {
     const unsigned char* data;
     size_t size;
 };
-
-static BlobView GetDefaultCredsBlob()
-{
-    // HMODULE del módulo actual (EXE o DLL donde está este código)
-    HMODULE hMod = (HMODULE)&__ImageBase;
-
-    // Busca el recurso por ID y tipo RCDATA (binario crudo)
-    HRSRC hRes = FindResourceW(hMod, MAKEINTRESOURCE(IDR_DEFAULT_CREDS_BLOB), RT_RCDATA);
-
-    if (!hRes) {
-        throw std::runtime_error("FindResource(IDR_DEFAULT_CREDS_BLOB, RT_RCDATA) failed");
-    }
-
-    // Carga el recurso en memoria
-    HGLOBAL hData = LoadResource(hMod, hRes);
-    if (!hData) {
-        throw std::runtime_error("LoadResource failed");
-    }
-
-    // Tamaño del recurso
-    DWORD size = SizeofResource(hMod, hRes);
-    if (size == 0) {
-        throw std::runtime_error("SizeofResource returned 0");
-    }
-
-    // Puntero a los datos (memoria de solo lectura administrada por el sistema)
-    const void* ptr = LockResource(hData);
-    if (!ptr) {
-        throw std::runtime_error("LockResource failed");
-    }
-
-    return { static_cast<const unsigned char*>(ptr), static_cast<size_t>(size) };
-}
-// Fin blo
 
 // Helpers de consola
 static void PrintLine(const wchar_t* s)
@@ -172,166 +137,162 @@ char* BuildEntropy()
     return entropy;
 }
 
-// 2) Descifrar el .blob con OpenSSL usando la ENTROPY reconstruida
-static bool DecryptBlobWithOpenSSL(const wchar_t* blobPath,
-    std::string& outUser,
-    std::string& outPass)
+// 2) Descifrar el el blob embebido con OpenSSL usando la ENTROPY reconstruida
+static BlobView GetDefaultCredsBlob()
 {
-    // Abrir archivo .blob en binario
-    HANDLE h = CreateFileW(blobPath, GENERIC_READ, FILE_SHARE_READ, nullptr,
-        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-    {
-        PrintLine(L"[ERROR] No se pudo abrir el archivo .blob");
-        return false;
+    // HMODULE del módulo actual (EXE o DLL donde está este código)
+    HMODULE hMod = (HMODULE)&__ImageBase;
+
+    // Busca el recurso por ID y tipo RCDATA (binario crudo)
+    HRSRC hRes = FindResourceW(hMod, MAKEINTRESOURCE(IDR_DEFAULT_CREDS_BLOB), RT_RCDATA);
+
+    if (!hRes) {
+        throw std::runtime_error("FindResource(IDR_DEFAULT_CREDS_BLOB, RT_RCDATA) failed");
     }
 
-    DWORD size = GetFileSize(h, nullptr);
-    if (size == INVALID_FILE_SIZE || size < sizeof(uint32_t) + sizeof(uint16_t))
-    {
-        CloseHandle(h);
-        PrintLine(L"[ERROR] .blob vacío o inválido");
-        return false;
+    // Carga el recurso en memoria
+    HGLOBAL hData = LoadResource(hMod, hRes);
+    if (!hData) {
+        throw std::runtime_error("LoadResource failed");
     }
 
-    std::vector<unsigned char> buf(size);
-    DWORD br = 0;
-    if (!ReadFile(h, buf.data(), size, &br, nullptr) || br != size)
-    {
-        CloseHandle(h);
-        PrintLine(L"[ERROR] Falló la lectura del .blob");
-        return false;
+    // Tamaño del recurso
+    DWORD size = SizeofResource(hMod, hRes);
+    if (size == 0) {
+        throw std::runtime_error("SizeofResource returned 0");
     }
-    CloseHandle(h);
 
-    // Layout esperado: [MAGIC(4)][VER(2)][SALT(16)][NONCE(12)][TAG(16)][CIPHERTEXT(N)]
+    // Puntero a los datos (memoria de solo lectura administrada por el sistema)
+    const void* ptr = LockResource(hData);
+    if (!ptr) {
+        throw std::runtime_error("LockResource failed");
+    }
+
+    return { static_cast<const unsigned char*>(ptr), static_cast<size_t>(size) };
+}
+
+static bool DecryptBlobWithOpenSSL_FromMemory(
+    const unsigned char* data, size_t size,
+    std::string& outUser, std::string& outPass)
+{
+    // Constantes del formato
     const uint32_t MAGIC_EXPECTED = 0x50494842; // 'PIHB'
     const uint16_t VER_EXPECTED = 0x0001;
-    const size_t SALT_LEN = 16;
-    const size_t NONCE_LEN = 12;
-    const size_t TAG_LEN = 16;
+    const size_t SALT_LEN = 16, NONCE_LEN = 12, TAG_LEN = 16;
     const size_t KEY_LEN = 32; // AES-256
     const int PBKDF2_ITERATIONS = 200000;
 
-    size_t offset = 0;
-
-    if (buf.size() < sizeof(uint32_t) + sizeof(uint16_t) + SALT_LEN + NONCE_LEN + TAG_LEN)
-    {
+    if (size < sizeof(uint32_t) + sizeof(uint16_t) + SALT_LEN + NONCE_LEN + TAG_LEN) {
         PrintLine(L"[ERROR] Blob demasiado corto para cabecera esperada");
         return false;
     }
 
+    size_t offset = 0;
     uint32_t magic = 0;
-    std::memcpy(&magic, buf.data() + offset, sizeof(magic));
-    offset += sizeof(magic);
+    std::memcpy(&magic, data + offset, sizeof(magic)); offset += sizeof(magic);
 
     uint16_t ver = 0;
-    std::memcpy(&ver, buf.data() + offset, sizeof(ver));
-    offset += sizeof(ver);
+    std::memcpy(&ver, data + offset, sizeof(ver));     offset += sizeof(ver);
 
-    if (magic != MAGIC_EXPECTED || ver != VER_EXPECTED)
-    {
+    if (magic != MAGIC_EXPECTED || ver != VER_EXPECTED) {
         PrintLine(L"[ERROR] Encabezado de blob no reconocido (MAGIC/VER)");
         return false;
     }
 
-    const unsigned char* salt = buf.data() + offset; offset += SALT_LEN;
-    const unsigned char* nonce = buf.data() + offset; offset += NONCE_LEN;
-    const unsigned char* tag = buf.data() + offset; offset += TAG_LEN;
+    const unsigned char* salt = data + offset; offset += SALT_LEN;
+    const unsigned char* nonce = data + offset; offset += NONCE_LEN;
+    const unsigned char* tag = data + offset; offset += TAG_LEN;
 
-    const size_t ciphertext_len = buf.size() - offset;
-    if (ciphertext_len == 0)
-    {
+    if (offset > size) {
+        PrintLine(L"[ERROR] Offsets inválidos");
+        return false;
+    }
+
+    const unsigned char* ciphertext = data + offset;
+    const size_t ciphertext_len = size - offset;
+    if (ciphertext_len == 0) {
         PrintLine(L"[ERROR] CIPHERTEXT vacío");
         return false;
     }
-    const unsigned char* ciphertext = buf.data() + offset;
 
-    // Passphrase: ofuscación dinámica (BuildEntropy())
-    // para que no aparezca la cadena literal en el binario.
+    // Passphrase ofuscada en tiempo de ejecución
     std::unique_ptr<char[]> passphrase(BuildEntropy());
     wprintf(L"[INFO] Entropy reconstruida: %hs \n", passphrase.get());
-    const unsigned char* pwd = reinterpret_cast<const unsigned char*>(passphrase.get());
     const int pwdLen = static_cast<int>(std::strlen(passphrase.get()));
 
-    // Derivar clave (PBKDF2-HMAC-SHA256)
+    // PBKDF2-HMAC-SHA256 -> key
     unsigned char key[KEY_LEN];
     if (PKCS5_PBKDF2_HMAC(passphrase.get(), pwdLen, salt, (int)SALT_LEN,
-        PBKDF2_ITERATIONS, EVP_sha256(), (int)KEY_LEN, key) != 1)
-    {
+        PBKDF2_ITERATIONS, EVP_sha256(), (int)KEY_LEN, key) != 1) {
         PrintLine(L"[ERROR] PBKDF2 falló");
         return false;
     }
 
-    // AES-256-GCM decrypt
+    // AES-256-GCM
     std::vector<unsigned char> plaintext(ciphertext_len);
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx)
-    {
+    if (!ctx) {
         PrintLine(L"[ERROR] EVP_CIPHER_CTX_new falló");
         return false;
     }
 
-    int ok = 1;
+    int ok = 1, outLen = 0, total = 0, finalLen = 0;
     ok &= EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
     ok &= EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)NONCE_LEN, nullptr);
     ok &= EVP_DecryptInit_ex(ctx, nullptr, nullptr, key, nonce);
-
-    int outLen = 0, total = 0;
     ok &= EVP_DecryptUpdate(ctx, plaintext.data(), &outLen, ciphertext, (int)ciphertext_len);
     total = outLen;
-
-    // Configurar TAG antes del Final
     ok &= EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, (int)TAG_LEN, (void*)tag);
-
-    // Final: autentica tag; si falla, ok será 0
-    int finalLen = 0;
     ok &= EVP_DecryptFinal_ex(ctx, plaintext.data() + total, &finalLen);
     EVP_CIPHER_CTX_free(ctx);
 
-    if (!ok)
-    {
+    if (!ok) {
         PrintLine(L"[ERROR] AES-GCM decryption falló (TAG inválido o datos corruptos)");
         return false;
     }
+
     total += finalLen;
     plaintext.resize(total);
 
-    // El contenido descifrado está en formato: user\0pass\0
+    // Formato: user\0pass\0
     std::string combined(reinterpret_cast<const char*>(plaintext.data()),
         reinterpret_cast<const char*>(plaintext.data()) + plaintext.size());
 
-    // Parseo simple
     outUser = combined.c_str();
     const size_t userLen = outUser.size();
-    if (userLen + 1 > combined.size())
-    {
+    if (userLen + 1 > combined.size()) {
         PrintLine(L"[ERROR] Formato de datos descifrados inválido");
         return false;
     }
     outPass = combined.c_str() + userLen + 1;
     return true;
 }
+// --- Fin de la funciones Blob Embebido de descifrado desde memoria ---
 
-// 3) main(): lee la ruta del .blob (argv[1] o ruta por defecto),
-//    descifra y muestra user/pass.
+// 3) main(): descifra y muestra user/pass.
 int wmain(int argc, wchar_t* argv[])
 {
-    // Ruta por defecto
-    const wchar_t* defaultBlob = L"..\\PIH_DPAPI_BlobGenerator\\artifacts\\default_creds.blob";
-
-    const wchar_t* blobPath = (argc > 1) ? argv[1] : defaultBlob;
-
     std::string user, pass;
-    if (!DecryptBlobWithOpenSSL(blobPath, user, pass))
-    {
-        PrintLine(L"[FALLO] No se pudo descifrar el blob.");
-        return 1;
+
+    if (argc > 0) {
+        // Sin ruta -> usa el recurso embebido
+        try {
+            BlobView bv = GetDefaultCredsBlob();
+            if (!DecryptBlobWithOpenSSL_FromMemory(bv.data, bv.size, user, pass)) {
+                PrintLine(L"[FALLO] No se pudo descifrar el blob embebido.");
+                return 1;
+            }
+        }
+        catch (const std::exception& ex) {
+            std::wstring msg = L"[ERROR] Exception: ";
+            msg += std::wstring(ex.what(), ex.what() + std::strlen(ex.what()));
+            PrintLine(msg.c_str());
+            return 1;
+        }
     }
 
     PrintLine(L"===== Blob Descifrado =====");
     std::wcout << L"User : " << user.c_str() << L"\n";
     std::wcout << L"Pass : " << pass.c_str() << L"\n";
-
     return 0;
 }
