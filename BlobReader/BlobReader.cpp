@@ -11,7 +11,6 @@
 #include <numeric>
 #include "resource.h"
 
-// Funciones para el llamar al blob embebido y generar el archivo de salida.
 // --- Loader del recurso embebido (RCDATA) ---
 extern "C" IMAGE_DOS_HEADER __ImageBase; // Para obtener HMODULE del módulo actual
 
