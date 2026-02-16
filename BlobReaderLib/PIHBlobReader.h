@@ -1,7 +1,26 @@
 #pragma once
+/**
+ * @file PIHBlobReader.h
+ * @brief API pública para descifrado de blobs PIHB (PBKDF2 + AES-256-GCM), desde ruta o desde recurso RCDATA embebido.
+ *
+ * - Mantiene compatibilidad con las APIs basadas en **path** (fichero en disco).
+ * - Añade APIs para leer el blob desde **RCDATA** embebido (mismo enfoque que BlobReader.cpp).
+ * - Los strings se devuelven como UTF-8 (char*), con terminador NUL.
+ *
+ * Autor: Leo + Copilot
+ */
 
-// Export/import clásico para Windows DLL
-#if defined(_WIN32) || defined(_WIN64)
+#include <cstddef>   // size_t
+#include <cstdint>   // uint32_t, etc.
+
+#ifdef _WIN32
+#include <windows.h>  // UINT
+#endif
+
+ // ================================================
+ // Export/Import macro
+ // ================================================
+#ifdef _WIN32
 #ifdef PIHREADER_EXPORTS
 #define PIHREADER_API __declspec(dllexport)
 #else
@@ -11,72 +30,135 @@
 #define PIHREADER_API
 #endif
 
-#include <cstddef>
-#include <wchar.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-    // Códigos de estado para la API
-    enum PIHBR_Status {
-        PIHBR_OK = 0,
-        PIHBR_ERR_INVALID_ARG = 1,
-        PIHBR_ERR_IO = 2,
-        PIHBR_ERR_INVALID_BLOB = 3,
-        PIHBR_ERR_PBKDF2 = 4,
-        PIHBR_ERR_EVP = 5,
-        PIHBR_ERR_INSUFFICIENT_BUFFER = 6,
-        PIHBR_ERR_EXCEPTION = 7
-    };
-
+    // ================================================
+    // Códigos de estado
+    // ================================================
     /**
-     * @brief Descifra el blob (.blob) usando OpenSSL (PBKDF2-HMAC-SHA256 + AES-256-GCM)
-     *        y devuelve user/pass en buffers del llamador (formato ASCII/UTF-8).
-     *
-     * Protocolo de buffers:
-     *   - outUser/outPass pueden ser NULL para consultar tamaños requeridos.
-     *   - outUserNeeded/outPassNeeded (si no son NULL) devuelven tamaños requeridos (incluyendo '\0').
-     *   - Si la capacidad no alcanza, devuelve PIHBR_ERR_INSUFFICIENT_BUFFER y no escribe en los buffers.
-     *
-     * @param blobPath         Ruta del .blob (WCHAR).
-     * @param outUser          Buffer destino para user (puede ser NULL).
-     * @param userCapacity     Capacidad en bytes de outUser.
-     * @param outPass          Buffer destino para pass (puede ser NULL).
-     * @param passCapacity     Capacidad en bytes de outPass.
-     * @param outUserNeeded    Devuelve tamaño requerido para user (incluye '\0') si no es NULL.
-     * @param outPassNeeded    Devuelve tamaño requerido para pass (incluye '\0') si no es NULL.
-     * @return PIHBR_Status
+     * @name Códigos de retorno
+     * @brief 0 indica éxito; valores negativos indican error.
+     * @{
      */
-    PIHREADER_API int PIH_DecryptBlobW(const wchar_t* blobPath,
+    enum {
+        PIHBR_OK = 0,
+        PIHBR_ERR_INVALID_ARG = -1,
+        PIHBR_ERR_IO = -2,
+        PIHBR_ERR_INVALID_BLOB = -3,
+        PIHBR_ERR_PBKDF2 = -4,
+        PIHBR_ERR_EVP = -5,
+        PIHBR_ERR_INSUFFICIENT_BUFFER = -6,
+        PIHBR_ERR_EXCEPTION = -7
+    };
+    /** @} */
+
+    // ================================================
+    // Utilidad: último error (thread-local)
+    // ================================================
+    /**
+     * @brief Devuelve el último mensaje de error (thread-local), en UTF-8.
+     * @return const char* puntero a buffer interno; no liberar.
+     *
+     * @note El buffer se invalida en la siguiente llamada a una API de este módulo.
+     */
+    PIHREADER_API const char* PIHBR_GetLastErrorMessage(void);
+
+    // ================================================
+    // APIs basadas en PATH (fichero .blob en disco)
+    // ================================================
+    /**
+     * @brief Descifra un blob desde ruta de archivo y copia en buffers del llamador.
+     *
+     * @param[in]  blobPath       Ruta (UTF-16) al fichero .blob.
+     * @param[out] outUser        Buffer destino para user (UTF-8, con '\0'). Puede ser NULL.
+     * @param[in]  userCapacity   Capacidad en bytes de outUser (incluye '\0'). Ignorado si outUser==NULL.
+     * @param[out] outPass        Buffer destino para pass (UTF-8, con '\0'). Puede ser NULL.
+     * @param[in]  passCapacity   Capacidad en bytes de outPass (incluye '\0'). Ignorado si outPass==NULL.
+     * @param[out] outUserNeeded  (Opc.) tamaño requerido (incluye '\0') para user.
+     * @param[out] outPassNeeded  (Opc.) tamaño requerido (incluye '\0') para pass.
+     *
+     * @return PIHBR_OK en éxito; error negativo en fallo.
+     *
+     * @note Patrón habitual:
+     *   1) Llamar con outUser/outPass=NULL para obtener tamaños (outUserNeeded/outPassNeeded).
+     *   2) Reservar buffers y llamar de nuevo para copiar datos.
+     */
+    PIHREADER_API int PIH_DecryptBlobW(
+        const wchar_t* blobPath,
         char* outUser, size_t userCapacity,
         char* outPass, size_t passCapacity,
         size_t* outUserNeeded,
-        size_t* outPassNeeded);
+        size_t* outPassNeeded
+    );
 
     /**
-     * @brief Variante que asigna memoria desde la DLL (LocalAlloc).
-     *        El llamador debe liberar con PIH_Free().
+     * @brief Descifra un blob desde ruta y devuelve cadenas asignadas por la DLL.
      *
-     * @param blobPath Ruta del .blob (WCHAR).
-     * @param outUser* Recibe puntero a memoria con user (ASCII/UTF-8).
-     * @param outPass* Recibe puntero a memoria con pass (ASCII/UTF-8).
-     * @return PIHBR_Status
+     * @param[in]  blobPath  Ruta (UTF-16) al fichero .blob.
+     * @param[out] outUser   Recibe puntero a memoria asignada con LocalAlloc (LMEM_FIXED).
+     * @param[out] outPass   Recibe puntero a memoria asignada con LocalAlloc (LMEM_FIXED).
+     *
+     * @return PIHBR_OK en éxito; error negativo en fallo.
+     *
+     * @warning Liberar la memoria con @ref PIH_Free.
      */
-    PIHREADER_API int PIH_DecryptBlobToAllocatedW(const wchar_t* blobPath,
+    PIHREADER_API int PIH_DecryptBlobToAllocatedW(
+        const wchar_t* blobPath,
         char** outUser,
-        char** outPass);
+        char** outPass
+    );
+
+    // ================================================
+    // APIs basadas en RCDATA (recurso embebido)
+    // ================================================
+    /**
+     * @brief Descifra el blob embebido por defecto (IDR_DEFAULT_CREDS_BLOB) y copia en buffers del llamador.
+     *
+     * @param[out] outUser        Buffer destino para user (UTF-8, con '\0'). Puede ser NULL.
+     * @param[in]  userCapacity   Capacidad en bytes de outUser (incluye '\0'). Ignorado si outUser==NULL.
+     * @param[out] outPass        Buffer destino para pass (UTF-8, con '\0'). Puede ser NULL.
+     * @param[in]  passCapacity   Capacidad en bytes de outPass (incluye '\0'). Ignorado si outPass==NULL.
+     * @param[out] outUserNeeded  (Opc.) tamaño requerido (incluye '\0') para user.
+     * @param[out] outPassNeeded  (Opc.) tamaño requerido (incluye '\0') para pass.
+     *
+     * @return PIHBR_OK en éxito; error negativo en fallo.
+     *
+     * @note El ID del recurso por defecto debe estar definido en `resource.h` como `IDR_DEFAULT_CREDS_BLOB`.
+     */
+    PIHREADER_API int PIH_DecryptBlobFromResourceW(
+        char* outUser, size_t userCapacity,
+        char* outPass, size_t passCapacity,
+        size_t* outUserNeeded,
+        size_t* outPassNeeded
+    );
 
     /**
-     * @brief Libera memoria asignada por la DLL (para PIH_DecryptBlobToAllocatedW).
+     * @brief Descifra un blob embebido (por ID) y devuelve cadenas asignadas por la DLL.
+     *
+     * @param[in]  resourceId  Identificador del recurso RCDATA (p. ej., IDR_DEFAULT_CREDS_BLOB).
+     * @param[out] outUser     Recibe puntero a memoria asignada con LocalAlloc (LMEM_FIXED).
+     * @param[out] outPass     Recibe puntero a memoria asignada con LocalAlloc (LMEM_FIXED).
+     *
+     * @return PIHBR_OK en éxito; error negativo en fallo.
+     *
+     * @warning Liberar la memoria con @ref PIH_Free.
      */
-    PIHREADER_API void PIH_Free(void* p);
+    PIHREADER_API int PIH_DecryptBlobFromResourceToAllocatedW(
+        unsigned int resourceId,
+        char** outUser,
+        char** outPass
+    );
 
+    // ================================================
+    // Liberación de memoria devuelta por las APIs *ToAllocated*
+    // ================================================
     /**
-     * @brief Devuelve el último mensaje de error (thread-local).
-     *        Puntero válido hasta nueva llamada o fin del hilo.
+     * @brief Libera memoria asignada por esta DLL (LocalAlloc).
+     * @param[in] mem  Puntero a liberar; acepta NULL (no-op).
      */
-    PIHREADER_API const char* PIHBR_GetLastErrorMessage();
+    PIHREADER_API void PIH_Free(void* mem);
 
 #ifdef __cplusplus
 } // extern "C"
