@@ -35,7 +35,6 @@ static void PrintLine(const wchar_t* s)
 // - key : clave XOR (0xAA) usada para recuperar los ASCII reales.
 // Retorna: puntero a un buffer asignado con 'new' terminado en '\0'.
 // Nota:
-//   - El llamador es responsable de liberar con 'delete[]' el puntero devuelto.
 //   - Se añade un byte extra para el terminador NUL y facilitar su uso como C-string..
 // Ejemplo: dato (0x87): 1 0 0 0 0 1 1 1
 // clave(0xAA) : 1 0 1 0 1 0 1 0
