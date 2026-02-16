@@ -1,14 +1,4 @@
 #pragma once
-/**
- * @file PIHBlobReader.h
- * @brief API pública para descifrado de blobs PIHB (PBKDF2 + AES-256-GCM), desde ruta o desde recurso RCDATA embebido.
- *
- * - Mantiene compatibilidad con las APIs basadas en **path** (fichero en disco).
- * - Añade APIs para leer el blob desde **RCDATA** embebido (mismo enfoque que BlobReader.cpp).
- * - Los strings se devuelven como UTF-8 (char*), con terminador NUL.
- *
- * Autor: Leo + Copilot
- */
 
 #include <cstddef>   // size_t
 #include <cstdint>   // uint32_t, etc.
